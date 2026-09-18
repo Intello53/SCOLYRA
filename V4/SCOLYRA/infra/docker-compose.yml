@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: scolyra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scolyra
+      POSTGRES_PASSWORD: scolyra
+      POSTGRES_DB: scolyra
+    ports:
+      - "5432:5432"
+    volumes:
+      - scolyra_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scolyra -d scolyra"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: scolyra-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - scolyra_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: scolyra-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: scolyra
+      MINIO_ROOT_PASSWORD: scolyra12345
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # Console web
+    volumes:
+      - scolyra_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  scolyra_postgres_data:
+  scolyra_redis_data:
+  scolyra_minio_data:
