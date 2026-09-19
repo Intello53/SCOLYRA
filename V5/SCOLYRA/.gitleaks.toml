@@ -1,0 +1,19 @@
+title = "SCOLYRA gitleaks config"
+
+# On repart des règles par défaut de gitleaks (détection de clés AWS,
+# Stripe, GitHub tokens, clés privées, etc.) et on ajoute seulement des
+# exceptions pour nos valeurs d'exemple/démo volontairement fictives.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Valeurs d'exemple et comptes de démonstration volontairement fictifs"
+paths = [
+  '''\.env\.example$''',
+]
+regexes = [
+  # Mots de passe de démonstration documentés en clair dans README/STATUS
+  # (comptes de test locaux, jamais utilisés en production).
+  '''demo12345''',
+  '''admin12345''',
+]

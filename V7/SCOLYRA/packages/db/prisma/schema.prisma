@@ -1,0 +1,688 @@
+// =========================================================
+// SCOLYRA — Schéma Prisma
+// Base : PostgreSQL + extension pgvector
+// =========================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ---------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------
+
+enum Role {
+  STUDENT
+  PARENT
+  ADMIN
+}
+
+enum SchoolLevel {
+  COLLEGE_6E
+  COLLEGE_5E
+  COLLEGE_4E
+  COLLEGE_3E
+  LYCEE_2NDE
+  LYCEE_1ERE
+  LYCEE_TERMINALE
+  POST_BAC
+}
+
+enum GoalStatus {
+  ACTIVE
+  ACHIEVED
+  ABANDONED
+  EXPIRED
+}
+
+enum RevisionStatus {
+  PLANNED
+  IN_PROGRESS
+  DONE
+  SKIPPED
+}
+
+enum DocumentType {
+  COURSE
+  PDF
+  COPY
+  SHEET
+  OTHER
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum ProjectStatus {
+  PLANNED
+  IN_PROGRESS
+  DONE
+  ARCHIVED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  ACCEPTED
+  WAITLISTED
+  REJECTED
+}
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+  INCOMPLETE
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  LEGAL_GUARDIAN_APPROVAL
+  MARKETING_EMAILS
+  AI_DATA_PROCESSING
+}
+
+enum AIRole {
+  FAST
+  POWERFUL
+  VISION
+  EMBEDDINGS
+}
+
+// ---------------------------------------------------------
+// UTILISATEUR & PROFIL
+// ---------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  role          Role      @default(STUDENT)
+  isMinor       Boolean   @default(false)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  profile           Profile?
+  studentProfile    StudentProfile?
+  orientationProfile OrientationProfile?
+  subscription      Subscription?
+
+  goals             Goal[]
+  studySessions     StudySession[]
+  grades            Grade[]
+  assessments       Assessment[]
+  mistakes          Mistake[]
+  documents         Document[]
+  courses           Course[]
+  revisionPlans     RevisionPlan[]
+  projects          Project[]
+  applications      Application[]
+  deadlines         Deadline[]
+  notifications     Notification[]
+  payments          Payment[]
+  aiConversations   AIConversation[]
+  aiUsage           AIUsage[]
+  auditLogs         AuditLog[]
+  consents          Consent[]
+  customSubjects    Subject[]           @relation("CustomSubjects")
+  legalGuardianOf   LegalGuardianLink[] @relation("Guardian")
+  guardedBy         LegalGuardianLink[] @relation("Student")
+
+  @@index([email])
+}
+
+// Lien représentant légal <-> élève mineur (requis pour paiements/consentements, §23/§25)
+model LegalGuardianLink {
+  id                String    @id @default(cuid())
+  guardianId        String
+  studentId         String
+  verified          Boolean   @default(false)
+  verificationToken String?   @unique
+  tokenExpiresAt    DateTime?
+  createdAt         DateTime  @default(now())
+
+  guardian User @relation("Guardian", fields: [guardianId], references: [id], onDelete: Cascade)
+  student  User @relation("Student", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([guardianId, studentId])
+}
+
+model Profile {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  firstName  String
+  lastName   String?
+  avatarUrl  String?
+  timezone   String   @default("Europe/Paris")
+  locale     String   @default("fr-FR")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model StudentProfile {
+  id                 String      @id @default(cuid())
+  userId             String      @unique
+  schoolLevel        SchoolLevel
+  className          String?
+  establishment       String?
+  options             String[]    @default([]) // codes d'options choisies (voir apps/web/lib/curriculum.ts)
+  specialties         String[]    @default([]) // codes de spécialités choisies (1ère/Terminale uniquement)
+  weeklyAvailableMin Int?        // temps disponible / semaine, en minutes
+  preferredWorkTimes  String?    // ex: "soir", "week-end" (texte libre pour V0)
+  difficultiesNote    String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjects UserSubject[]
+  skills   UserSkill[]
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------
+// MATIÈRES & COMPÉTENCES
+// ---------------------------------------------------------
+
+model Subject {
+  id          String   @id @default(cuid())
+  name        String
+  category    String?  // ex: "Tronc commun", "Spécialité"
+  isCustom    Boolean  @default(false) // créée librement par un élève (§ matières personnalisées)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  createdBy    User?         @relation("CustomSubjects", fields: [createdById], references: [id], onDelete: SetNull)
+  userSubjects UserSubject[]
+  skills       Skill[]
+  grades       Grade[]
+  assessments  Assessment[]
+  mistakes     Mistake[]
+  revisionSessions RevisionSession[]
+
+  // Unique par (nom, créateur) : deux élèves peuvent chacun avoir une
+  // matière personnalisée du même nom ; les matières "officielles"
+  // (createdById = null) restent uniques entre elles par nom.
+  @@unique([name, createdById])
+}
+
+model UserSubject {
+  id               String   @id @default(cuid())
+  studentProfileId String
+  subjectId        String
+  isSpecialty      Boolean  @default(false)
+  estimatedLevel   Int?     // 0-20, auto-déclaré à l'onboarding
+  includeInAverage Boolean  @default(true) // décoché = matière suivie mais hors calcul de la moyenne
+  createdAt        DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  subject        Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, subjectId])
+}
+
+model Skill {
+  id        String   @id @default(cuid())
+  subjectId String
+  name      String
+  createdAt DateTime @default(now())
+
+  subject   Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  userSkills UserSkill[]
+  mistakes   Mistake[]
+
+  @@index([subjectId])
+}
+
+model UserSkill {
+  id               String   @id @default(cuid())
+  studentProfileId String
+  skillId          String
+  masteryLevel     Int      @default(0) // 0-100
+  updatedAt        DateTime @updatedAt
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  skill          Skill          @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, skillId])
+}
+
+// ---------------------------------------------------------
+// OBJECTIFS & SESSIONS DE TRAVAIL
+// ---------------------------------------------------------
+
+model Goal {
+  id            String     @id @default(cuid())
+  userId        String
+  title         String
+  description   String?
+  subjectId     String?
+  targetValue   Float?     // ex: 15 (objectif de moyenne /20)
+  currentValue  Float?     // ex: 13.8
+  deadline      DateTime?
+  status        GoalStatus @default(ACTIVE)
+  milestones    Json?      // [{ label: string, done: boolean }] — simplifié en V0 (pas de modèle dédié)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model StudySession {
+  id          String   @id @default(cuid())
+  userId      String
+  subjectId   String?
+  title       String
+  startAt     DateTime
+  endAt       DateTime
+  completed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startAt])
+}
+
+// ---------------------------------------------------------
+// NOTES & ÉVALUATIONS
+// ---------------------------------------------------------
+
+model Grade {
+  id         String   @id @default(cuid())
+  userId     String
+  subjectId  String
+  value      Float
+  maxValue   Float    @default(20)
+  coefficient Float   @default(1)
+  label      String?
+  date       DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, subjectId])
+}
+
+model Assessment {
+  id         String   @id @default(cuid())
+  userId     String
+  subjectId  String
+  title       String
+  date        DateTime?
+  createdAt   DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  mistakes Mistake[]
+
+  @@index([userId, subjectId])
+}
+
+model Mistake {
+  id           String   @id @default(cuid())
+  userId       String
+  subjectId    String
+  skillId      String?
+  assessmentId String?
+  description  String
+  recurrence   Int      @default(1)
+  createdAt    DateTime @default(now())
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject    Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  skill      Skill?      @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  assessment Assessment? @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, subjectId])
+}
+
+// ---------------------------------------------------------
+// DOCUMENTS / RAG
+// ---------------------------------------------------------
+
+model Document {
+  id           String         @id @default(cuid())
+  userId       String
+  title        String
+  type         DocumentType
+  status       DocumentStatus @default(UPLOADED)
+  storageKey   String         // clé dans MinIO/S3
+  mimeType     String?
+  sizeBytes    Int?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chunks DocumentChunk[]
+
+  @@index([userId, status])
+}
+
+// Chunk + embedding pgvector pour la recherche sémantique (§16)
+model DocumentChunk {
+  id         String                     @id @default(cuid())
+  documentId String
+  content    String
+  embedding  Unsupported("vector(1536)")?
+  chunkIndex Int
+  createdAt  DateTime                   @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+}
+
+model Course {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  subjectId String?
+  content   String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------
+// RÉVISIONS
+// ---------------------------------------------------------
+
+model RevisionPlan {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  goalId    String?
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime @default(now())
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions RevisionSession[]
+
+  @@index([userId])
+}
+
+model RevisionSession {
+  id             String          @id @default(cuid())
+  revisionPlanId String
+  subjectId      String?
+  title          String
+  priority       Int             @default(3) // 1 = haute priorité
+  scheduledAt    DateTime?
+  status         RevisionStatus  @default(PLANNED)
+  createdAt      DateTime        @default(now())
+
+  revisionPlan RevisionPlan @relation(fields: [revisionPlanId], references: [id], onDelete: Cascade)
+  subject      Subject?     @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  @@index([revisionPlanId, status])
+}
+
+// ---------------------------------------------------------
+// PROJETS
+// ---------------------------------------------------------
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  status      ProjectStatus @default(PLANNED)
+  deadline    DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks ProjectTask[]
+
+  @@index([userId, status])
+}
+
+model ProjectTask {
+  id        String     @id @default(cuid())
+  projectId String
+  title     String
+  status    TaskStatus @default(TODO)
+  dueDate   DateTime?
+  createdAt DateTime   @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+}
+
+// ---------------------------------------------------------
+// ORIENTATION
+// ---------------------------------------------------------
+
+model OrientationProfile {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  desiredFields           String? // domaines envisagés (texte libre V0)
+  notes                   String?
+  geographicMaxDistanceKm Int?    // contrainte géographique optionnelle
+  geographicPreferredRegions String[] @default([])
+  quizAnswers             Json?   // réponses brutes du quiz d'orientation premium
+  quizResult              Json?   // synthèse générée à partir du quiz (agent OrientationAgent)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Formation : structure prête à recevoir un import de données officielles vérifiées (§19/§47).
+// AUCUNE donnée réelle n'est pré-remplie par ce schéma.
+model Formation {
+  id            String   @id @default(cuid())
+  name          String
+  establishment String?
+  domain        String?
+  requirements  String?  // TODO — source officielle à intégrer (ex. Parcoursup)
+  sourceUrl     String?  // traçabilité de la source lors d'un futur import
+  isVerified    Boolean  @default(false) // false = saisie manuelle par un élève, non vérifiée
+  createdAt     DateTime @default(now())
+
+  applications Application[]
+}
+
+model Application {
+  id          String            @id @default(cuid())
+  userId      String
+  formationId String
+  status      ApplicationStatus @default(DRAFT)
+  submittedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  formation Formation @relation(fields: [formationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model Deadline {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  dueDate     DateTime
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, dueDate])
+}
+
+// ---------------------------------------------------------
+// NOTIFICATIONS
+// ---------------------------------------------------------
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+// ---------------------------------------------------------
+// FACTURATION (STRIPE)
+// ---------------------------------------------------------
+
+model Subscription {
+  id                   String              @id @default(cuid())
+  userId               String              @unique
+  plan                 SubscriptionPlan    @default(FREE)
+  status               SubscriptionStatus  @default(ACTIVE)
+  stripeCustomerId     String?             @unique
+  stripeSubscriptionId String?             @unique
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  userId          String
+  stripePaymentId String?  @unique
+  amountCents     Int
+  currency        String   @default("eur")
+  status          String
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------
+// IA
+// ---------------------------------------------------------
+
+model AIConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String?
+  agent     String?  // ex: "PedagogicalAgent", "RevisionAgent"...
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AIMessage[]
+
+  @@index([userId])
+}
+
+model AIMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String   // "user" | "assistant" | "system"
+  content        String
+  createdAt      DateTime @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
+
+model AIUsage {
+  id           String   @id @default(cuid())
+  userId       String
+  role         AIRole
+  promptTokens Int      @default(0)
+  outputTokens Int      @default(0)
+  costCents    Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------
+// SÉCURITÉ / CONFORMITÉ (RGPD, §23/§24)
+// ---------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  metadata  Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
+
+model Consent {
+  id        String      @id @default(cuid())
+  userId    String
+  type      ConsentType
+  granted   Boolean
+  version   String      // version du texte consenti
+  createdAt DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+// ---------------------------------------------------------
+// FONCTIONNALITÉS (bascule Premium pilotée depuis l'admin)
+// ---------------------------------------------------------
+
+// FeatureFlag — permet à un admin de décider, depuis /admin, quelles
+// fonctionnalités sont réservées à Premium sans toucher au code. Les
+// clés utilisées côté application sont définies dans
+// apps/web/lib/feature-flags.ts (FEATURE_KEYS).
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  label       String
+  description String?
+  premiumOnly Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
