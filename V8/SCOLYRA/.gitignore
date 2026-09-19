@@ -1,0 +1,46 @@
+# Dépendances / build
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+coverage/
+
+# --- SECRETS : ne jamais committer ---
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+*.pem
+*.key
+*.p12
+*.pfx
+**/secrets/
+**/*secret*
+!**/*secret*.example
+
+# Base de données locale / dumps (peuvent contenir de vraies données)
+*.sqlite
+*.sqlite3
+*.dump
+*.sql
+!packages/db/prisma/migrations/**/*.sql
+/infra/**/data/
+
+# Uploads utilisateurs (jamais committer du contenu réel d'élèves)
+/uploads/
+/apps/web/public/uploads/
+
+# Logs, éditeurs, OS
+*.log
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Tests / couverture
+playwright-report/
+test-results/
