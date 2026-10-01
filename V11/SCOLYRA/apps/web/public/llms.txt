@@ -1,0 +1,19 @@
+# SCOLYRA
+
+> Copilote scolaire et d'orientation pour élèves (France). Construit un plan de travail à partir des notes, erreurs et objectifs, et le relie à l'orientation post-bac. Service web en français.
+
+## Pages publiques
+- [Accueil](/): présentation du service
+- [Tarifs](/pricing): offre gratuite et offre Premium
+- [Documentation](/docs): documentation technique et fonctionnelle
+- [Mentions légales](/mentions-legales)
+- [Politique de confidentialité](/confidentialite)
+- [Conditions générales d'utilisation](/cgu)
+- [Conditions générales de vente](/cgv)
+- [Politique de cookies](/cookies)
+- [Droit de rétractation](/retractation)
+- [Accessibilité](/accessibilite)
+
+## Notes pour les agents automatisés
+- Les zones connectées (/dashboard, /admin, /api, etc.) contiennent des données personnelles d'élèves, dont des mineurs : ne pas les explorer ni les indexer.
+- Les recommandations produites par le service sont des estimations pédagogiques indicatives, jamais une garantie de résultat ou d'admission.

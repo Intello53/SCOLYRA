@@ -1,0 +1,23 @@
+{
+  "name": "@scolyra/db",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.ts",
+  "scripts": {
+    "generate": "node ../../scripts/with-root-env.js -- prisma generate",
+    "migrate": "node ../../scripts/with-root-env.js -- prisma migrate dev",
+    "migrate:deploy": "node ../../scripts/with-root-env.js -- prisma migrate deploy",
+    "seed": "node ../../scripts/with-root-env.js -- tsx prisma/seed.ts",
+    "seed:demo": "node ../../scripts/with-root-env.js -- tsx prisma/seed-demo.ts",
+    "studio": "node ../../scripts/with-root-env.js -- prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.19.1",
+    "argon2": "^0.41.1"
+  },
+  "devDependencies": {
+    "prisma": "^5.19.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.2"
+  }
+}

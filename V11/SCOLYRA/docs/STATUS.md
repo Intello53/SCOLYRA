@@ -1,0 +1,386 @@
+Projet :
+SCOLYRA
+
+État :
+V10 — correction architecturale importante : `prisma migrate dev`
+remplacé par `prisma db push` (aucun historique de migrations n'a
+jamais été livré dans les zips, ce qui devenait incompatible avec la
+persistance des données activée en V9 — causait le crash du
+calendrier et probablement d'autres pages selon le schéma touché).
+Connexion admin corrigée (le message d'erreur générique masquait un
+blocage anti brute-force après plusieurs essais ratés). Navigation
+mobile ajoutée (la sidebar était intégralement invisible sous un
+certain seuil de largeur, sans aucun remplacement — expliquait le
+bouton SAV "invisible"). V9 : inscription durcie, fournisseur IA
+Anthropic, SAV complet, persistance des données entre versions,
+export/import manuel de la base. Reste non branché : pipeline RAG réel,
+tests automatisés.
+
+Fonctionnalités terminées (V10) :
+- CORRECTION ARCHITECTURALE — MIGRATIONS : `packages/db` utilise
+  désormais `prisma db push --accept-data-loss` au lieu de
+  `prisma migrate dev` pour `pnpm db:migrate`/`migrate:deploy`. Cause
+  du crash du calendrier (et potentiellement d'autres pages) :
+  `migrate dev` a besoin d'un historique de migrations cohérent avec
+  l'état de la base, mais aucune migration n'a jamais pu être générée
+  côté génération de ce projet (jamais de vraie exécution de Prisma —
+  voir Problèmes connus depuis la toute première version). Tant que
+  chaque zip repartait d'une base vide, ça passait inaperçu ; depuis
+  que les données persistent (V9), la base garde un état "avancé" que
+  les migrations locales (absentes) ne reflètent plus, et
+  `migrate dev` se retrouvait incohérent selon les tables. `db push`
+  resynchronise directement le schéma vers la base, sans dépendre
+  d'un historique — voir docs/DATABASE.md pour le détail et la
+  limite acceptée (`--accept-data-loss`, à connaître avant de mettre
+  à jour si des données de test comptent).
+- CORRECTION CONNEXION ADMIN : le message d'erreur de /login était
+  toujours "Email ou mot de passe incorrect", même quand la vraie
+  cause était le blocage anti brute-force (8 tentatives/15 min par
+  email) après plusieurs essais ratés en testant. Le message précis
+  s'affiche maintenant. La redirection post-connexion tient aussi
+  compte du rôle (ADMIN → /admin, sinon → /dashboard) au lieu de
+  toujours renvoyer vers /dashboard.
+- DIAGNOSTIC INSCRIPTION amélioré : le détail technique de l'erreur
+  est maintenant inclus dans la réponse JSON de /api/register (à
+  retirer avant toute mise en production réelle, voir le commentaire
+  dans le code et docs/SECURITY.md) — plus besoin d'aller chercher
+  dans les logs du terminal pour comprendre ce qui bloque.
+- NAVIGATION MOBILE AJOUTÉE : la sidebar élève et la sidebar admin
+  étaient toutes les deux intégralement masquées (`hidden md:flex`)
+  sous le breakpoint `md`, SANS AUCUN remplacement — pas un détail
+  esthétique, un vrai trou de navigation qui rendait des pages comme
+  /aide invisibles/inaccessibles sur un écran étroit. Ajout de
+  components/mobile-nav.tsx et mobile-admin-nav.tsx (menu coulissant,
+  mêmes liens que les sidebars respectives, jamais de duplication de
+  la liste des liens).
+
+Fonctionnalités terminées (V9) :
+- CORRECTION INSCRIPTION : /api/register enveloppée dans un try/catch
+  complet — toute exception (ex. argon2 natif qui échoue à charger)
+  renvoie désormais du JSON avec le détail loggé côté serveur, au lieu
+  de laisser Next.js renvoyer une page d'erreur HTML que le client
+  interprétait à tort comme "impossible de contacter le serveur". Le
+  message client distingue maintenant une vraie coupure réseau d'une
+  réponse serveur invalide (avec le code HTTP affiché).
+- dotenv-cli REMPLACÉ par scripts/with-root-env.js (script maison, zéro
+  dépendance supplémentaire) : mêmes scripts pnpm, mais message
+  d'erreur explicite si .env est absent ou DATABASE_URL vide, plutôt
+  que de continuer silencieusement sans rien charger.
+- PERSISTANCE DES DONNÉES ENTRE VERSIONS : infra/docker-compose.yml
+  fixe maintenant `name: scolyra` — Docker Compose nommait le projet
+  d'après le dossier d'extraction, donc chaque nouvelle version
+  (V8/, V9/...) recréait des volumes Postgres/MinIO vides. Toutes les
+  données de test survivent désormais aux mises à jour. Ajout de
+  `pnpm db:export` / `pnpm db:import` (scripts/db-export.sh,
+  db-import.sh — pg_dump/psql) pour une sauvegarde manuelle explicite
+  ou un transfert vers une autre machine.
+- FOURNISSEUR IA ANTHROPIC RÉELLEMENT IMPLÉMENTÉ :
+  packages/ai/src/providers/anthropic-provider.ts — avant cette
+  version, la branche "anthropic" de getAIProvider() était en
+  commentaire, donc AUCUNE clé API ne pouvait jamais faire quoi que ce
+  soit. generateText et generateStructured fonctionnent réellement
+  (vrais appels à l'API Messages) ; analyzeDocument et embed lèvent une
+  erreur explicite (pas de pipeline documents/RAG réel, voir
+  ROADMAP.md) plutôt que de prétendre fonctionner. Procédure de
+  configuration complète dans docs/AI.md (entièrement réécrit).
+- SAV / SUPPORT COMPLET : modèles SupportTicket + SupportMessage,
+  apps/web/app/api/support/tickets(+/[id]+/[id]/messages) — un élève
+  crée une demande depuis /aide, y répond, suit son statut (Ouvert/
+  Répondu/Fermé) ; un admin voit tous les tickets et répond depuis
+  /admin/support. Journalisé dans AuditLog.
+- Vérification exhaustive automatisée (script Python) de la profondeur
+  de TOUS les imports relatifs vers components/ et lib/ dans le projet
+  (119 fichiers) — a trouvé et corrigé un vrai bug de profondeur
+  introduit dans cette même session (support/tickets/[id]/route.ts).
+
+Fonctionnalités terminées (V8) :
+- CORRECTION : dans un monorepo pnpm, chaque script s'exécute avec
+  pour dossier de travail le package concerné (packages/db/ ou
+  apps/web/), jamais la racine — donc ni Prisma CLI ni Next.js n'y
+  trouvaient le `.env` racine (seul endroit où ce projet a jamais
+  documenté d'en créer un). Corrigé en faisant charger explicitement
+  ce `.env` racine via `dotenv-cli` dans les scripts concernés de
+  packages/db/package.json (generate/migrate/migrate:deploy/seed/
+  seed:demo/studio) et apps/web/package.json (dev/build/start) —
+  `dotenv -e ../../.env -- <commande originale>`. Aucune commande
+  tapée par l'utilisateur ne change (toujours `pnpm db:migrate`,
+  `pnpm dev`...), seul l'intérieur du script change. Nouvelle
+  dépendance : `dotenv-cli`, ajoutée aux deux package.json concernés
+  — un `pnpm install` est nécessaire après mise à jour depuis une
+  version antérieure.
+
+Fonctionnalités terminées (V7) :
+- CORRECTION : ajout de `previewFeatures = ["postgresqlExtensions"]`
+  au bloc `generator client` du schéma Prisma — sans cette ligne,
+  `extensions = [vector]` dans le bloc `datasource` est rejeté par le
+  validateur (P1012), ce qui bloquait `prisma migrate dev`, qui
+  bloquait à son tour la génération du client Prisma, qui faisait
+  échouer `pnpm db:seed` et `pnpm seed:demo` avec une erreur
+  "Cannot find module '.prisma/client/default'" sans rapport apparent
+  avec la vraie cause. Les trois échecs du rapport de test n'étaient
+  donc qu'UN SEUL bug, pas trois.
+
+Fonctionnalités terminées (V6) :
+- CORRECTION : packages/ui/package.json créé (name: "@scolyra/ui",
+  suit exactement le même modèle que packages/ai/package.json) +
+  packages/ui/src/index.ts minimal mais réel. `pnpm-workspace.yaml`
+  matche "packages/*" et apps/web/package.json déclare
+  "@scolyra/ui": "workspace:*" depuis le début — mais le dossier ne
+  contenait qu'un sous-dossier src/ vide, sans manifeste, ce qui
+  bloquait `pnpm install` pour tout le monorepo. Audité : tous les
+  dossiers sous apps/* et packages/* ont maintenant un package.json
+  valide (5 au total).
+
+Fonctionnalités terminées (V5) :
+- CORRECTIONS SUITE À UN VRAI TEST (merci !) — deux bugs bloquants
+  trouvés en conditions réelles, corrigés :
+  1. `packages/db/prisma/schema.prisma` utilisait un commentaire de
+     bloc `/** ... */` au-dessus du modèle FeatureFlag — syntaxe
+     invalide en Prisma (P1012, seuls `//`/`///` sont supportés).
+     Corrigé en `//` ; tout le fichier a été relu, plus aucune
+     occurrence de `/* */`.
+  2. `infra/docker-compose.yml` référençait `minio/minio:latest` sur
+     Docker Hub — MinIO a retiré ce dépôt de Docker Hub en septembre
+     2026 ("pull access denied ... repository does not exist"). Migré
+     vers `quay.io/minio/minio` (registre officiel actuel de MinIO),
+     avec un tag épinglé plutôt que `:latest`.
+- STRIPE RÉELLEMENT IMPLÉMENTÉ : apps/web/app/api/stripe/checkout
+  (vraie session Checkout), /api/stripe/webhook (vérifie la signature,
+  synchronise Subscription.plan/status/stripeCustomerId/
+  stripeSubscriptionId/currentPeriodEnd sur checkout.session.completed,
+  customer.subscription.updated/deleted, invoice.payment_failed),
+  /api/stripe/portal (Billing Portal — l'utilisateur gère/résilie
+  lui-même). Dégradation propre : sans STRIPE_SECRET_KEY +
+  STRIPE_PRICE_ID_PREMIUM configurés, /parametres retombe sur le
+  bascule de démo (/api/subscription/upgrade), qui se désactive de
+  lui-même dès que Stripe est configuré (impossible de contourner un
+  vrai paiement une fois branché). La règle mineur/représentant légal
+  vérifié (§25) est appliquée dans les deux chemins via un helper
+  partagé (apps/web/lib/subscription-guard.ts). Procédure complète
+  étape par étape (créer le produit/prix, récupérer les clés, Stripe
+  CLI pour les webhooks en local, cartes de test, passage en Live) :
+  voir docs/PAYMENTS.md, entièrement réécrit.
+- VÉRIFICATION DU REPRÉSENTANT LÉGAL, de bout en bout : un élève mineur
+  invite son représentant depuis /parametres (email) →
+  apps/web/app/api/guardian/invite crée un compte PARENT minimal si
+  besoin + un lien LegalGuardianLink non vérifié avec un token
+  aléatoire (48h) → email envoyé via apps/web/lib/email.ts (Resend si
+  configuré, sinon loggé en console en dev, jamais silencieusement
+  perdu) → le représentant ouvre /verification-representant?token=...
+  (page publique, sans compte requis) et confirme → POST
+  /api/guardian/verify marque le lien vérifié. L'upgrade Premium d'un
+  compte mineur se débloque alors réellement (plus de blocage
+  permanent comme en V3/V4).
+- DOCUMENTS RÉELLEMENT PERSISTÉS : apps/web/app/api/documents — création
+  et suivi de statut (UPLOADED → READY simulé) en base réelle. Le
+  fichier physique lui-même n'est toujours pas stocké (pas de MinIO
+  branché), mais l'enregistrement survit au rafraîchissement.
+- PROJETS RÉELLEMENT PERSISTÉS : apps/web/app/api/projects +
+  api/projects/[id]/tasks + api/project-tasks/[id] — création de
+  projet avec tâches initiales, ajout de tâches, bascule terminée/à
+  faire, progression recalculée depuis les vraies tâches en base.
+- RÉVISIONS RÉELLEMENT PERSISTÉES : apps/web/app/api/revision-sessions
+  — un RevisionPlan "courant" est créé automatiquement au premier
+  ajout de session (pas de gestion de plans multiples en V0), sessions
+  avec priorité et statut cliquable (à faire → en cours → fait),
+  persistées en base.
+
+Fonctionnalités terminées (V4) :
+- Rate limiting Redis sur la connexion (8/15min par email) et
+  l'inscription (5/heure par IP) — apps/web/lib/rate-limit.ts.
+- Cookies de session explicitement durcis (httpOnly/sameSite/secure),
+  vérification du mot de passe non court-circuitée si l'email
+  n'existe pas (mitigation d'énumération de comptes).
+- En-têtes HTTP de sécurité (X-Frame-Options, HSTS, etc.) via
+  next.config.js.
+- RGPD réellement implémenté : GET /api/account/export (export JSON
+  complet), DELETE /api/account/delete (suppression en cascade),
+  tous deux branchés sur les boutons de /parametres. Consentement
+  CGU/confidentialité obligatoire et versionné à l'inscription
+  (modèle Consent).
+- Pages légales /mentions-legales, /confidentialite, /cgu créées avec
+  des gabarits — contiennent des champs [À COMPLÉTER] pour tout ce
+  qui ne peut pas être inventé (identité de l'éditeur, hébergeur...).
+- Journal d'audit (AuditLog) réellement instrumenté : connexion,
+  création de compte, export, suppression, upgrade Premium,
+  modification de feature flag — visible et branché sur de vraies
+  données dans /admin/journal.
+- PANNEAU ADMIN POUR LE PREMIUM (/admin/fonctionnalites) : nouveau
+  modèle FeatureFlag, un admin peut décider depuis l'UI quelles
+  fonctionnalités (quiz d'orientation, simulateur de coût, et deux
+  flags préparés pour plus tard) sont réservées à Premium ou
+  ouvertes à tous — sans toucher au code. Le quiz et le simulateur
+  vérifient ce réglage dynamique.
+- .gitignore durci (secrets, dumps, uploads), scan automatique de
+  secrets sur GitHub (.github/workflows/secret-scan.yml, gitleaks) et
+  hook pre-commit local optionnel (scripts/install-git-hooks.sh).
+- docs/SECURITY.md réécrit avec une checklist concrète "avant de
+  pousser sur GitHub" et un état honnête de la conformité RGPD.
+- docs/QUICKSTART.md enrichi : génération d'un vrai NEXTAUTH_SECRET,
+  configuration Stripe en mode TEST (clés, Stripe CLI — les routes
+  Stripe elles-mêmes restent non implémentées), Resend, et rappel de
+  la checklist sécurité avant le premier push.
+
+Fonctionnalités terminées (V3) :
+- AUTHENTIFICATION RÉELLE (next-auth v4, Credentials + Argon2id contre
+  Prisma, session JWT incluant le rôle). Middleware (apps/web/middleware.ts)
+  protège réellement /dashboard, /objectifs, /revisions, /calendrier,
+  /documents, /projets, /orientation, /coach, /matieres, /profil,
+  /parametres ET /admin (redirection /login si non connecté,
+  redirection /dashboard si rôle ≠ ADMIN sur /admin — corrige le
+  problème "admin accessible sans aucun code").
+- Comptes de test créés par `pnpm seed:demo` :
+    Élève : demo@scolyra.app / demo12345
+    Admin  : admin@scolyra.app / admin12345
+- INSCRIPTION EN PLUSIEURS ÉTAPES (apps/web/app/(marketing)/register) :
+  identité → classe → options (si la classe en a) → spécialités (1re/
+  Terminale uniquement, 3 puis 2 max). Référentiel complet dans
+  apps/web/lib/curriculum.ts (sources : education.gouv.fr, Note DEPP
+  n°26-06, onisep.fr — consultées en septembre 2026), avec validation
+  CÔTÉ SERVEUR (apps/web/app/api/register) qui rejette une spécialité
+  choisie pour un niveau qui n'en a pas (ex. 2de, collège).
+- NOTES RÉELLES : apps/web/app/api/grades — ajout de note par matière,
+  moyenne recalculée à partir des vraies notes (apps/web/lib/grades.ts).
+- MATIÈRES PERSONNALISÉES : apps/web/app/api/subjects — un élève peut
+  créer une matière libre ; apps/web/app/api/user-subjects/[id] permet
+  de décocher "compter dans la moyenne" par matière (persisté).
+- OBJECTIFS RÉELS : apps/web/app/api/goals — création, paliers
+  (stockés en Json sur Goal.milestones, cochables et persistés).
+- CALENDRIER RÉEL : apps/web/app/api/study-sessions — ajout de
+  sessions sur la semaine réelle, marquage "fait" persisté.
+- ORIENTATION RÉELLE : apps/web/app/api/orientation — domaines
+  envisagés et contrainte géographique (distance max, régions
+  préférées) éditables et persistés ; apps/web/app/api/orientation/
+  applications — ajout de candidatures en saisie libre (Formation
+  créée avec isVerified=false, jamais présentée comme officielle).
+- QUIZ D'ORIENTATION PREMIUM (/orientation/quiz) : 10 questions à choix
+  multiples pondérées par domaine (apps/web/lib/orientation-quiz.ts),
+  intègre la contrainte géographique, résultat calculé et persisté
+  (OrientationProfile.quizAnswers/quizResult). Gate réel sur
+  Subscription.plan === PREMIUM, côté serveur (pas juste caché en CSS).
+- SIMULATEUR DE COÛT DES ÉTUDES PREMIUM (/orientation/simulateur-cout) :
+  chiffres indicatifs sourcés (arrêté droits d'inscription 2025-2026,
+  étude coût de la rentrée 2025, barème bourses CROUS) dans
+  apps/web/lib/cost-simulator.ts — clairement marqué non contractuel.
+- UPGRADE FREE → PREMIUM RÉEL : apps/web/app/api/subscription/upgrade —
+  bascule instantanée (AUCUN paiement réel, voir docs/PAYMENTS.md),
+  mais bloque réellement un compte mineur sans LegalGuardianLink
+  vérifié (§25), avec message explicite plutôt qu'un échec silencieux.
+- COACH IA BRANCHÉ SUR LES VRAIES DONNÉES : apps/web/app/api/coach
+  appelle réellement AIOrchestrator + les agents avec les VRAIES
+  notes/objectifs/erreurs/orientation de l'utilisateur connecté — ce
+  n'est plus une réponse aléatoire tirée d'une liste fixe. Le
+  raisonnement reste celui du MockAIProvider tant qu'aucun vrai
+  fournisseur IA n'est configuré (voir docs/AI.md).
+- Dashboard, sidebar et page Profil connectés aux vraies données
+  (moyenne réelle calculée, spécialités/options réelles affichées,
+  jours actifs de la semaine calculés depuis les vraies sessions).
+- Admin : vue d'ensemble et liste des élèves connectées à de vraies
+  requêtes Prisma (comptages réels, derniers comptes créés, alerte
+  réelle sur les mineurs sans représentant vérifié).
+
+Fonctionnalités terminées (V2 — inchangées) :
+- Couche d'animation Framer Motion, mécaniques d'engagement (confettis,
+  toasts, streak), identité visuelle (encre/violet/or, Fraunces+Inter),
+  site /docs, groupes de routes (marketing)/(app)/admin.
+
+Fonctionnalités partielles :
+- ParcoursupAgent : lève explicitement une erreur "non implémenté".
+- Admin "Contenus", "Abonnements" : toujours sur données de
+  démonstration (lib/demo-data.ts) — "Vue d'ensemble", "Élèves",
+  "Fonctionnalités" et "Journal d'audit" sont branchés sur Prisma.
+- Pages pricing/about : statiques, pas de paiement réel (assumé,
+  voir upgrade Premium ci-dessus qui est le seul flux d'abonnement réel).
+
+Fonctionnalités non implémentées :
+- Resend : l'abstraction email existe et fonctionne (apps/web/lib/email.ts,
+  utilisée par l'invitation représentant légal), mais aucune clé n'est
+  configurée par défaut — sans RESEND_API_KEY, les emails sont
+  seulement loggés en console (comportement voulu en dev, voir
+  QUICKSTART.md pour l'activer).
+- Redis/BullMQ (jobs asynchrones — Redis sert déjà au rate limiting,
+  mais aucune queue de tâches n'est en place), pipeline RAG réel (OCR,
+  embeddings réels, recherche pgvector), tests automatisés,
+  déploiement production.
+- Gestion de plans de révision multiples (V0 : un seul plan "courant"
+  par élève, créé automatiquement).
+- Stockage réel de fichiers (MinIO/S3) pour les documents — seul
+  l'enregistrement en base existe, pas le fichier lui-même.
+
+Commandes de lancement :
+pnpm install
+cp .env.example .env
+docker compose -f infra/docker-compose.yml up -d
+pnpm db:migrate
+pnpm db:seed
+pnpm seed:demo
+pnpm dev
+
+URL locale :
+http://localhost:3000 — /login pour se connecter avec un compte de
+test, /register pour créer un vrai compte avec l'onboarding complet.
+
+Variables obligatoires :
+DATABASE_URL, REDIS_URL, NEXTAUTH_SECRET (générer avec
+`openssl rand -base64 32`). Les autres ont des valeurs par défaut
+fonctionnelles en développement, voir .env.example.
+
+Services externes :
+Aucun requis pour utiliser l'application avec un vrai compte
+(AI_PROVIDER=mock par défaut). Stripe/Resend/un vrai fournisseur IA
+sont optionnels et non branchés dans cette version.
+
+Comptes de démonstration (créés par pnpm seed:demo) :
+  Élève : demo@scolyra.app / demo12345
+  Admin  : admin@scolyra.app / admin12345 (accède à /admin)
+
+Problèmes connus :
+- MISE À JOUR IMPORTANTE : le test s'est poursuivi plus loin que
+  jamais — connexion démo réussie, mais admin en échec (message
+  trompeur, corrigé), calendrier en crash (incohérence migrations/
+  données persistées, corrigé), SAV invisible (sidebar masquée sans
+  remplacement mobile, corrigé), inscription toujours bloquée (raison
+  précise inconnue faute de message d'erreur cette fois — le diagnostic
+  a été enrichi en V10 pour la prochaine tentative). RIEN de ce qui a
+  été corrigé dans cette version (V10) n'a encore été revalidé par un
+  test réel — en particulier `db push`, jamais exécuté du tout.
+- Le reste n'a été exécuté dans AUCUN environnement de génération :
+  pas de Node/pnpm/Docker/réseau disponibles ici. Tout le code
+  (schéma Prisma, migrations implicites, routes API, middleware,
+  y compris le rate limiting Redis et le nouveau modèle FeatureFlag)
+  a été écrit avec soin et relu manuellement pour la cohérence des
+  imports et des types, mais n'a subi NI `prisma migrate dev`, NI
+  `pnpm build`, NI un seul chargement de page réel. Traite ce livrable
+  comme un premier jet solide à tester, pas comme un logiciel validé.
+- Point d'attention prioritaire au premier lancement : `pnpm db:migrate`
+  (valide enfin le schéma Prisma, y compris les champs V3 ET le nouveau
+  modèle FeatureFlag de la V4, ET les champs verificationToken/
+  tokenExpiresAt sur LegalGuardianLink de la V5), puis `pnpm seed:demo`, puis tester la
+  connexion avec les deux comptes, puis vérifier que le rate limiting
+  ne bloque pas tes propres tests répétés (voir REDIS_URL dans .env).
+- Les polices Fraunces/Inter (next/font/google) nécessitent un accès
+  réseau au tout premier build.
+- Le simulateur de coût et les données du référentiel de spécialités/
+  options sont des estimations/synthèses, pas des données officielles
+  temps réel — à revalider périodiquement (voir sources citées dans
+  apps/web/lib/curriculum.ts et apps/web/lib/cost-simulator.ts).
+- Les pages /mentions-legales, /confidentialite et /cgu contiennent
+  des champs [À COMPLÉTER] volontaires — NE PAS les publier telles
+  quelles, voir docs/SECURITY.md.
+- gitleaks (scan de secrets) n'a jamais été exécuté sur ce dépôt dans
+  cet environnement — le premier push sur GitHub sera donc le premier
+  vrai test du workflow .github/workflows/secret-scan.yml.
+
+Prochaine étape recommandée :
+1. Relancer `pnpm db:migrate` avec le schéma corrigé et confirmer que
+   toute la chaîne (migration → seed → dev) passe cette fois. C'est la
+   vérification la plus importante : le premier vrai test a déjà
+   trouvé deux bugs bloquants, il peut en rester d'autres (Stripe et
+   les nouvelles routes n'ont, elles, jamais été testées du tout).
+2. Suivre docs/PAYMENTS.md pour configurer Stripe en mode Test et
+   valider un paiement de bout en bout avec une carte de test.
+3. Brancher un vrai fournisseur IA (AI_PROVIDER) pour que le coach
+   raisonne réellement plutôt que via le mock.
+4. Écrire les tests automatisés (aucun n'existe encore) — au minimum
+   l'isolation des données (utilisateur A / utilisateur B) et le flux
+   d'authentification, qui sont les plus critiques côté sécurité.
